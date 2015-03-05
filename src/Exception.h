@@ -2,7 +2,7 @@
 
 #include <cassert>
 #include <stdexcept>
-
+#include <v8.h>
 #include <boost/shared_ptr.hpp>
 #include <boost/iterator/iterator_facade.hpp>
 
