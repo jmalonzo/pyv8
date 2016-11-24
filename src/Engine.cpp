@@ -1,5 +1,7 @@
 #include "Engine.h"
 
+#include <iostream>
+
 #include <boost/preprocessor.hpp>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/locks.hpp>
@@ -160,12 +162,21 @@ void CEngine::Expose(void)
     .staticmethod("lowMemory")
 
     .def("setMemoryLimit", &CEngine::SetMemoryLimit, (py::arg("max_young_space_size") = 0,
-                                                py::arg("max_old_space_size") = 0,
-                                                py::arg("max_executable_size") = 0),
+                                                      py::arg("max_old_space_size") = 0,
+                                                      py::arg("max_executable_size") = 0),
          "Specifies the limits of the runtime's memory use."
          "You must set the heap size before initializing the VM"
          "the size cannot be adjusted after the VM is initialized.")
     .staticmethod("setMemoryLimit")
+
+    .def("ignoreOutOfMemoryException", &v8::V8::IgnoreOutOfMemoryException,
+         "Ignore out-of-memory exceptions.")
+    .staticmethod("ignoreOutOfMemoryException")
+
+    .def("setStackLimit", &CEngine::SetStackLimit, (py::arg("stack_limit_size") = 0),
+         "Uses the address of a local variable to determine the stack top now."
+         "Given a size, returns an address that is that far from the current top of stack.")
+    .staticmethod("setStackLimit")
 
     .def("setMemoryAllocationCallback", &MemoryAllocationManager::SetCallback,
                                         (py::arg("callback"),
@@ -326,11 +337,7 @@ void CEngine::TerminateAllThreads(void)
 
 void CEngine::ReportFatalError(const char* location, const char* message)
 {
-  std::ostringstream oss;
-
-  oss << "<" << location << "> " << message;
-
-  throw CJavascriptException(oss.str());
+  std::cerr << "<" << location << "> " << message << std::endl;
 }
 
 void CEngine::ReportMessage(v8::Handle<v8::Message> message, v8::Handle<v8::Value> data)
@@ -339,20 +346,41 @@ void CEngine::ReportMessage(v8::Handle<v8::Message> message, v8::Handle<v8::Valu
   int lineno = message->GetLineNumber();
   v8::String::Utf8Value sourceline(message->GetSourceLine());
 
-  std::ostringstream oss;
-
-  oss << *filename << ":" << lineno << " -> " << *sourceline;
-
-  throw CJavascriptException(oss.str());
+  std::cerr << *filename << ":" << lineno << " -> " << *sourceline << std::endl;
 }
 
 bool CEngine::SetMemoryLimit(int max_young_space_size, int max_old_space_size, int max_executable_size)
 {
   v8::ResourceConstraints limit;
 
-  limit.set_max_young_space_size(max_young_space_size);
-  limit.set_max_old_space_size(max_old_space_size);
-  limit.set_max_executable_size(max_executable_size);
+  if (max_young_space_size) limit.set_max_young_space_size(max_young_space_size);
+  if (max_old_space_size) limit.set_max_old_space_size(max_old_space_size);
+  if (max_executable_size) limit.set_max_executable_size(max_executable_size);
+
+  return v8::SetResourceConstraints(v8::Isolate::GetCurrent(), &limit);
+}
+
+// Uses the address of a local variable to determine the stack top now.
+// Given a size, returns an address that is that far from the current
+// top of stack.
+uint32_t *CEngine::CalcStackLimitSize(uint32_t size)
+{
+  uint32_t* answer = &size - (size / sizeof(size));
+
+  // If the size is very large and the stack is very near the bottom of
+  // memory then the calculation above may wrap around and give an address
+  // that is above the (downwards-growing) stack.  In that case we return
+  // a very low address.
+  if (answer > &size) return reinterpret_cast<uint32_t*>(sizeof(size));
+
+  return answer;
+}
+
+bool CEngine::SetStackLimit(uint32_t stack_limit_size)
+{
+  v8::ResourceConstraints limit;
+
+  limit.set_stack_limit(CalcStackLimitSize(stack_limit_size));
 
   return v8::SetResourceConstraints(v8::Isolate::GetCurrent(), &limit);
 }
@@ -369,7 +397,7 @@ py::object CEngine::InternalPreCompile(v8::Handle<v8::String> src)
 
   Py_END_ALLOW_THREADS
 
-  if (!precompiled.get()) CJavascriptException::ThrowIf(try_catch);
+  if (!precompiled.get()) CJavascriptException::ThrowIf(m_isolate, try_catch);
   if (precompiled->HasError()) throw CJavascriptException("fail to compile", ::PyExc_SyntaxError);
 
   py::object obj(py::handle<>(::PyByteArray_FromStringAndSize(precompiled->Data(), precompiled->Length())));
@@ -382,19 +410,14 @@ boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Handle<v8::String> src,
                                                     int line, int col,
                                                     py::object precompiled)
 {
-  if (!v8::Context::InContext())
-  {
-    throw CJavascriptException("please enter a context first");
-  }
-
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::HandleScope handle_scope(m_isolate);
 
   v8::TryCatch try_catch;
 
-  v8::Persistent<v8::String> script_source(v8::Isolate::GetCurrent(), src);
+  v8::Persistent<v8::String> script_source(m_isolate, src);
 
   v8::Handle<v8::Script> script;
-  v8::Handle<v8::String> source = v8::Local<v8::String>::New(v8::Isolate::GetCurrent(), script_source);
+  v8::Handle<v8::String> source = v8::Local<v8::String>::New(m_isolate, script_source);
   std::auto_ptr<v8::ScriptData> script_data;
 
   if (!precompiled.is_none())
@@ -422,7 +445,7 @@ boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Handle<v8::String> src,
 
   if (line >= 0 && col >= 0)
   {
-    v8::ScriptOrigin script_origin(name, v8::Integer::New(line), v8::Integer::New(col));
+    v8::ScriptOrigin script_origin(name, v8::Integer::New(m_isolate, line), v8::Integer::New(m_isolate, col));
 
     script = v8::Script::Compile(source, &script_origin, script_data.get());
   }
@@ -444,9 +467,9 @@ boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Handle<v8::String> src,
   }
 #endif
 
-  if (script.IsEmpty()) CJavascriptException::ThrowIf(try_catch);
+  if (script.IsEmpty()) CJavascriptException::ThrowIf(m_isolate, try_catch);
 
-  return boost::shared_ptr<CScript>(new CScript(*this, script_source, script));
+  return boost::shared_ptr<CScript>(new CScript(m_isolate, *this, script_source, script));
 }
 
 py::object CEngine::ExecuteScript(v8::Handle<v8::Script> script)
@@ -457,12 +480,7 @@ py::object CEngine::ExecuteScript(v8::Handle<v8::Script> script)
   }
 #endif
 
-  if (!v8::Context::InContext())
-  {
-    throw CJavascriptException("please enter a context first");
-  }
-
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::HandleScope handle_scope(m_isolate);
 
   v8::TryCatch try_catch;
 
@@ -483,10 +501,10 @@ py::object CEngine::ExecuteScript(v8::Handle<v8::Script> script)
         throw py::error_already_set();
       }
 
-      CJavascriptException::ThrowIf(try_catch);
+      CJavascriptException::ThrowIf(m_isolate, try_catch);
     }
 
-    result = v8::Null();
+    result = v8::Null(m_isolate);
   }
 
   return CJavascriptObject::Wrap(result);
@@ -496,7 +514,7 @@ py::object CEngine::ExecuteScript(v8::Handle<v8::Script> script)
 
 void CScript::visit(py::object handler, v8i::LanguageMode mode) const
 {
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::HandleScope handle_scope(m_isolate);
 
   v8i::Handle<v8i::Object> obj = v8::Utils::OpenHandle(*Source());
 
@@ -521,7 +539,7 @@ void CScript::visit(py::object handler, v8i::LanguageMode mode) const
     if (parser.Parse()) {
       if (::PyObject_HasAttrString(handler.ptr(), "onProgram"))
       {
-        handler.attr("onProgram")(CAstFunctionLiteral(info.function()));
+        handler.attr("onProgram")(CAstFunctionLiteral(info.zone(), info.function()));
       }
     }
   }
@@ -531,7 +549,7 @@ void CScript::visit(py::object handler, v8i::LanguageMode mode) const
 
 const std::string CScript::GetSource(void) const
 {
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::HandleScope handle_scope(m_isolate);
 
   v8::String::Utf8Value source(Source());
 
@@ -540,7 +558,7 @@ const std::string CScript::GetSource(void) const
 
 py::object CScript::Run(void)
 {
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::HandleScope handle_scope(m_isolate);
 
   return m_engine.ExecuteScript(Script());
 }
@@ -553,7 +571,7 @@ class CPythonExtension : public v8::Extension
 
   static void CallStub(const v8::FunctionCallbackInfo<v8::Value>& args)
   {
-    v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+    v8::HandleScope handle_scope(args.GetIsolate());
     CPythonGIL python_gil;
     py::object func = *static_cast<py::object *>(v8::External::Cast(*args.Data())->Value());
 
@@ -583,7 +601,7 @@ class CPythonExtension : public v8::Extension
                           CJavascriptObject::Wrap(args[4]), CJavascriptObject::Wrap(args[5]),
                           CJavascriptObject::Wrap(args[7]), CJavascriptObject::Wrap(args[8])); break;
     default:
-      v8::ThrowException(v8::Exception::Error(v8::String::NewSymbol("too many arguments")));
+      args.GetIsolate()->ThrowException(v8::Exception::Error(v8::String::NewFromUtf8(args.GetIsolate(), "too many arguments")));
       break;
     }
 
@@ -604,9 +622,9 @@ public:
 
   }
 
-  virtual v8::Handle<v8::FunctionTemplate> GetNativeFunction(v8::Handle<v8::String> name)
+  virtual v8::Handle<v8::FunctionTemplate> GetNativeFunctionTemplate(v8::Isolate* isolate, v8::Handle<v8::String> name)
   {
-    v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+    v8::EscapableHandleScope handle_scope(isolate);
     CPythonGIL python_gil;
 
     py::object func;
@@ -628,14 +646,14 @@ public:
         return v8::Handle<v8::FunctionTemplate>();
       }
     }
-    catch (const std::exception& ex) { v8::ThrowException(v8::Exception::Error(v8::String::New(ex.what()))); }
-    catch (const py::error_already_set&) { CPythonObject::ThrowIf(); }
-    catch (...) { v8::ThrowException(v8::Exception::Error(v8::String::NewSymbol("unknown exception"))); }
+    catch (const std::exception& ex) { isolate->ThrowException(v8::Exception::Error(v8::String::NewFromUtf8(isolate, ex.what()))); }
+    catch (const py::error_already_set&) { CPythonObject::ThrowIf(isolate); }
+    catch (...) { isolate->ThrowException(v8::Exception::Error(v8::String::NewFromUtf8(isolate, "unknown exception"))); }
 
-    v8::Handle<v8::External> func_data = v8::External::New(new py::object(func));
-    v8::Handle<v8::FunctionTemplate> func_tmpl = v8::FunctionTemplate::New(CallStub, func_data);
+    v8::Handle<v8::External> func_data = v8::External::New(isolate, new py::object(func));
+    v8::Handle<v8::FunctionTemplate> func_tmpl = v8::FunctionTemplate::New(isolate, CallStub, func_data);
 
-    return handle_scope.Close(func_tmpl);
+    return handle_scope.Escape(v8::Local<v8::FunctionTemplate>(func_tmpl));
   }
 };
 

@@ -33,12 +33,12 @@
 namespace v8 {
   namespace internal {
 
-PrettyPrinter::PrettyPrinter() {
+PrettyPrinter::PrettyPrinter(Zone* zone) {
   output_ = NULL;
   size_ = 0;
   pos_ = 0;
 
-  InitializeAstVisitor(v8i::Isolate::Current());
+  InitializeAstVisitor(zone);
 }
 
 
@@ -487,8 +487,8 @@ const char* PrettyPrinter::PrintProgram(FunctionLiteral* program) {
 }
 
 
-void PrettyPrinter::PrintOut(AstNode* node) {
-  PrettyPrinter printer;
+void PrettyPrinter::PrintOut(Zone* zone, AstNode* node) {
+  PrettyPrinter printer(zone);
   PrintF("%s", printer.Print(node));
 }
 
@@ -651,7 +651,7 @@ class IndentedScope BASE_EMBEDDED {
 //-----------------------------------------------------------------------------
 
 
-AstPrinter::AstPrinter() : indent_(0) {
+AstPrinter::AstPrinter(Zone *zone) : PrettyPrinter(zone), indent_(0) {
 }
 
 
@@ -1228,7 +1228,7 @@ void JsonAstBuilder::AddAttributePrefix(const char* name) {
 void JsonAstBuilder::AddAttribute(const char* name, Handle<String> value) {
   SmartArrayPointer<char> value_string = value->ToCString();
   AddAttributePrefix(name);
-  Print("\"%s\"", *value_string);
+  Print("\"%s\"", value_string.get());
 }
 
 
@@ -1258,7 +1258,7 @@ void JsonAstBuilder::VisitBlock(Block* stmt) {
 void JsonAstBuilder::VisitModuleStatement(ModuleStatement* node) {
   TagScope tag(this, "ModuleStatement");
   SmartArrayPointer<char> name = node->proxy()->name()->ToCString();
-  AddAttributePrefix(*name);
+  AddAttributePrefix(name.get());
   Visit(node->body());
 }
 

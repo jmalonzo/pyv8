@@ -6,6 +6,7 @@ from __future__ import print_function
 import sys, os, re
 import logging
 import collections
+import functools
 
 is_py3k = sys.version_info[0] > 2
 
@@ -36,7 +37,7 @@ __version__ = '1.0'
 
 __all__ = ["ReadOnly", "DontEnum", "DontDelete", "Internal",
            "JSError", "JSObject", "JSNull", "JSUndefined", "JSArray", "JSFunction",
-           "JSClass", "JSEngine", "JSContext",
+           "JSClass", "JSEngine", "JSContext", "JSIsolate",
            "JSObjectSpace", "JSAllocationAction",
            "JSStackTrace", "JSStackFrame", "profiler",
            "JSExtension", "JSLocker", "JSUnlocker", "AST"]
@@ -154,17 +155,6 @@ def js_escape_unicode(text):
 class JSExtension(_PyV8.JSExtension):
     def __init__(self, name, source, callback=None, dependencies=[], register=True):
         _PyV8.JSExtension.__init__(self, js_escape_unicode(name), js_escape_unicode(source), callback, dependencies, register)
-
-
-def func_apply(self, thisArg, argArray=[]):
-    if isinstance(thisArg, JSObject):
-        return self.invoke(thisArg, argArray)
-
-    this = JSContext.current.eval("(%s)" % json.dumps(thisArg))
-
-    return self.invoke(this, argArray)
-
-JSFunction.apply = func_apply
 
 
 class JSLocker(_PyV8.JSLocker):
@@ -757,6 +747,7 @@ JSScript = _PyV8.JSScript
 
 JSStackTrace = _PyV8.JSStackTrace
 JSStackTrace.Options = _PyV8.JSStackTraceOptions
+JSStackTrace.GetCurrentStackTrace = staticmethod(lambda frame_limit, options: _PyV8.JSIsolate.current.GetCurrentStackTrace(frame_limit, options))
 JSStackFrame = _PyV8.JSStackFrame
 
 
@@ -1002,6 +993,7 @@ class TestContext(unittest.TestCase):
             # Check that env1.prop still exists.
             self.assertEqual(3, int(env1.locals.prop))
 
+
 class TestWrapper(unittest.TestCase):
     def testObject(self):
         with JSContext() as ctxt:
@@ -1211,7 +1203,7 @@ class TestWrapper(unittest.TestCase):
             self.assertEqual("hello flier from flier", hello('flier'))
 
             tester = ctxt.eval("({ 'name': 'tester' })")
-            self.assertEqual("hello flier from tester", hello.invoke(tester, ['flier']))
+            self.assertEqual("hello flier from tester", hello.apply(tester, ['flier']))
             self.assertEqual("hello flier from json", hello.apply({ 'name': 'json' }, ['flier']))
 
     def testConstructor(self):
@@ -2230,6 +2222,37 @@ class TestEngine(unittest.TestCase):
             self.assertTrue((JSObjectSpace.Code, JSAllocationAction.alloc) in alloc)
 
         JSEngine.setMemoryAllocationCallback(None)
+
+    def testOutOfMemory(self):
+        with JSIsolate():
+            JSEngine.setMemoryLimit(max_young_space_size=16 * 1024, max_old_space_size=4 * 1024 * 1024)
+
+            with JSContext() as ctxt:
+                JSEngine.ignoreOutOfMemoryException()
+
+                ctxt.eval("var a = new Array(); while(true) a.push(a);")
+
+                self.assertTrue(ctxt.hasOutOfMemoryException)
+
+                JSEngine.setMemoryLimit()
+
+                JSEngine.collect()
+
+    def testStackLimit(self):
+        with JSIsolate():
+            JSEngine.setStackLimit(256 * 1024)
+
+            with JSContext() as ctxt:
+                oldStackSize = ctxt.eval("var maxStackSize = function(i){try{(function m(){++i&&m()}())}catch(e){return i}}(0); maxStackSize")
+
+        with JSIsolate():
+            JSEngine.setStackLimit(512 * 1024)
+
+            with JSContext() as ctxt:
+                newStackSize = ctxt.eval("var maxStackSize = function(i){try{(function m(){++i&&m()}())}catch(e){return i}}(0); maxStackSize")
+
+        self.assertTrue(newStackSize > oldStackSize * 2)
+
 
 class TestDebug(unittest.TestCase):
     def setUp(self):

@@ -39,8 +39,8 @@ class CPythonObject : public CWrapper
   static void DisposeCallback(v8::Persistent<v8::Value> object, void* parameter);
 #endif
 protected:
-  static void SetupObjectTemplate(v8::Handle<v8::ObjectTemplate> clazz);
-  static v8::Handle<v8::ObjectTemplate> CreateObjectTemplate(void);
+  static void SetupObjectTemplate(v8::Isolate *isolate, v8::Handle<v8::ObjectTemplate> clazz);
+  static v8::Handle<v8::ObjectTemplate> CreateObjectTemplate(v8::Isolate *isolate);
 
   static v8::Handle<v8::Value> WrapInternal(py::object obj);
 public:
@@ -49,7 +49,7 @@ public:
   static py::object Unwrap(v8::Handle<v8::Object> obj);
   static void Dispose(v8::Handle<v8::Value> value);
 
-  static void ThrowIf(void);
+  static void ThrowIf(v8::Isolate* isolate);
 };
 
 struct ILazyObject
@@ -76,10 +76,10 @@ public:
 
   virtual ~CJavascriptObject()
   {
-    m_obj.Dispose();
+    m_obj.Reset();
   }
 
-  v8::Handle<v8::Object> Object(void) const { return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), m_obj); }
+  v8::Local<v8::Object> Object(void) const { return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), m_obj); }
 
   py::object GetAttr(const std::string& name);
   void SetAttr(const std::string& name, py::object value);
@@ -183,7 +183,7 @@ public:
 
   ~CJavascriptFunction()
   {
-    m_self.Dispose();
+    m_self.Reset();
   }
 
   v8::Handle<v8::Object> Self(void) const { return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), m_self); }
@@ -191,7 +191,8 @@ public:
   static py::object CallWithArgs(py::tuple args, py::dict kwds);
   static py::object CreateWithArgs(CJavascriptFunctionPtr proto, py::tuple args, py::dict kwds);
 
-  py::object Apply(CJavascriptObjectPtr self, py::list args, py::dict kwds);
+  py::object ApplyJavascript(CJavascriptObjectPtr self, py::list args, py::dict kwds);
+  py::object ApplyPython(py::object self, py::list args, py::dict kwds);
   py::object Invoke(py::list args, py::dict kwds);
 
   const std::string GetName(void) const;
