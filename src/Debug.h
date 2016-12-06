@@ -13,13 +13,11 @@ class CDebug
 
   py::object m_onDebugEvent;
   py::object m_onDebugMessage;
-  py::object m_onDispatchDebugMessages;
 
   v8::Persistent<v8::Context> m_debug_context, m_eval_context;
 
   static void OnDebugEvent(const v8::Debug::EventDetails& details);
   static void OnDebugMessage(const v8::Debug::Message& message);
-  static void OnDispatchDebugMessages(void);
 
   void Init(void);
 public:
@@ -34,13 +32,8 @@ public:
   bool IsEnabled(void) { return m_enabled; }
   void SetEnable(bool enable);
 
-  void DebugBreak(void) { v8::Debug::DebugBreak(); }
-  void DebugBreakForCommand(py::object data);
-  void CancelDebugBreak(void) { v8::Debug::CancelDebugBreak(); }
-  void ProcessDebugMessages(void) { v8::Debug::ProcessDebugMessages(); }
-
-  void Listen(const std::string& name, int port, bool wait_for_connection);
-  void SendCommand(const std::string& cmd);
+  void DebugBreak(void) { v8::Debug::DebugBreak(v8::Isolate::GetCurrent()); }
+  void CancelDebugBreak(void) { v8::Debug::CancelDebugBreak(v8::Isolate::GetCurrent()); }
 
   py::object GetDebugContext(void);
   py::object GetEvalContext(void);

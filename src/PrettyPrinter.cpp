@@ -24,6 +24,7 @@
 // THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#ifdef SUPPORT_AST
 
 #include <stdarg.h>
 
@@ -150,7 +151,7 @@ void PrettyPrinter::VisitIfStatement(IfStatement* node) {
 
 void PrettyPrinter::VisitContinueStatement(ContinueStatement* node) {
   Print("continue");
-  ZoneStringList* labels = node->target()->labels();
+  ZoneList<const AstRawString*>* labels = node->target()->labels();
   if (labels != NULL) {
     Print(" ");
     ASSERT(labels->length() > 0);  // guaranteed to have at least one entry
@@ -162,7 +163,7 @@ void PrettyPrinter::VisitContinueStatement(ContinueStatement* node) {
 
 void PrettyPrinter::VisitBreakStatement(BreakStatement* node) {
   Print("break");
-  ZoneStringList* labels = node->target()->labels();
+  ZoneList<const AstRawString*>* labels = node->target()->labels();
   if (labels != NULL) {
     Print(" ");
     ASSERT(labels->length() > 0);  // guaranteed to have at least one entry
@@ -541,7 +542,7 @@ void PrettyPrinter::PrintStatements(ZoneList<Statement*>* statements) {
 }
 
 
-void PrettyPrinter::PrintLabels(ZoneStringList* labels) {
+void PrettyPrinter::PrintLabels(ZoneList<const AstRawString*>* labels) {
   if (labels != NULL) {
     for (int i = 0; i < labels->length(); i++) {
       PrintLiteral(labels->at(i), false);
@@ -693,7 +694,7 @@ void AstPrinter::PrintLiteralWithModeIndented(const char* info,
 }
 
 
-void AstPrinter::PrintLabelsIndented(ZoneStringList* labels) {
+void AstPrinter::PrintLabelsIndented(ZoneList<const AstRawString*>* labels) {
   if (labels == NULL || labels->length() == 0) return;
   PrintIndented("LABELS ");
   PrintLabels(labels);
@@ -1654,3 +1655,5 @@ void JsonAstBuilder::VisitModuleUrl(ModuleUrl* node) {
 }
 
 }}
+
+#endif /* SUPPORT_AST */

@@ -8,7 +8,7 @@ void CLocker::enter(void)
 {
     Py_BEGIN_ALLOW_THREADS
 
-    m_locker.reset(new v8::Locker(m_isolate.get() ? m_isolate->GetIsolate() : v8i::Isolate::GetDefaultIsolateForLocking()));
+    m_locker.reset(new v8::Locker(m_isolate.get() ? m_isolate->GetIsolate() : v8::Isolate::GetCurrent()));
 
     Py_END_ALLOW_THREADS
 }
@@ -23,7 +23,8 @@ void CLocker::leave(void)
 
 bool CLocker::IsLocked()
 {
-  return v8::Locker::IsLocked(v8i::Isolate::GetDefaultIsolateForLocking());
+  // FIXME?
+  return v8::Locker::IsLocked(v8::Isolate::GetCurrent());
 }
 
 void CLocker::Expose(void)
@@ -32,8 +33,8 @@ void CLocker::Expose(void)
     .def(py::init<>())
     .def(py::init<CIsolatePtr>((py::arg("isolate"))))
 
-    .add_static_property("active", &v8::Locker::IsActive,
-                         "whether Locker is being used by this V8 instance.")
+//    .add_static_property("active", &v8::Locker::IsActive,
+//                         "whether Locker is being used by this V8 instance.")
 
     .add_static_property("locked", &CLocker::IsLocked,
                          "whether or not the locker is locked by the current thread.")

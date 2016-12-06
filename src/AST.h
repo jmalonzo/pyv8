@@ -12,8 +12,8 @@
 
 #undef COMPILER
 #include "src/v8.h"
-#include "src/ast.h"
-#include "src/scopes.h"
+#include "src/ast/ast.h"
+#include "src/ast/scopes.h"
 #include "src/assembler.h"
 
 #include "utf8.h"
@@ -38,6 +38,9 @@ template <typename T>
 inline py::list to_python(v8i::Zone *zone, v8i::ZoneList<T *>* lst);
 
 template <typename T>
+inline py::list to_python(v8i::Zone *zone, v8i::ThreadedList<T>* lst);
+
+template <typename T>
 inline py::list to_python(v8i::ZoneList<T *>* lst);
 
 template <typename T>
@@ -49,7 +52,7 @@ T _to_string(v8i::Handle<v8i::String> str)
 
   if (content.IsFlat())
   {
-    if (content.IsAscii())
+    if (content.IsOneByte())
     {
         v8i::Vector<const uint8_t> buf = content.ToOneByteVector();
 
@@ -68,7 +71,7 @@ T _to_string(v8i::Handle<v8i::String> str)
   else
   {
     int len = 0;
-    v8i::SmartArrayPointer<char> buf = str->ToCString(v8i::DISALLOW_NULLS, v8i::FAST_STRING_TRAVERSAL, &len);
+    std::unique_ptr<char[]> buf = str->ToCString(v8i::DISALLOW_NULLS, v8i::FAST_STRING_TRAVERSAL, &len);
 
     return T(buf.get(), len);
   }
@@ -98,28 +101,32 @@ public:
   bool IsEval(void) const { return m_scope->is_eval_scope(); }
   bool IsFunction(void) const { return m_scope->is_function_scope(); }
   bool IsModule(void) const { return m_scope->is_module_scope(); }
-  bool IsGlobal(void) const { return m_scope->is_global_scope(); }
+  bool IsGlobal(void) const { return m_scope->is_script_scope(); }
+  bool IsScript(void) const { return m_scope->is_script_scope(); }
   bool IsCatch(void) const { return m_scope->is_catch_scope(); }
   bool IsBlock(void) const { return m_scope->is_block_scope(); }
   bool IsWith(void) const { return m_scope->is_with_scope(); }
   bool IsDeclaration(void) const { return m_scope->is_declaration_scope(); }
-  bool IsStrictOrExtendedEval(void) const { return m_scope->is_strict_or_extended_eval_scope(); }
 
-  bool IsClassicMode(void) const { return m_scope->is_classic_mode(); }
-  bool IsExtendedMode(void) const { return m_scope->is_extended_mode(); }
+  bool IsStrict(void) const { return is_strict(m_scope->language_mode()); }
+  bool IsSloppy(void) const { return is_sloppy(m_scope->language_mode()); }
 
   bool CallsEval(void) const { return m_scope->calls_eval(); }
+  bool CallsSloppyEval(void) const { return m_scope->calls_sloppy_eval(); }
   bool OuterScopeCallsEval(void) const { return m_scope->calls_eval(); }
 
-  bool InsideWith(void) const { return m_scope->inside_with(); }
-  bool ContainsWith(void) const { return m_scope->contains_with(); }
+  bool IsAsmModule(void) const { return m_scope->IsAsmModule(); }
+  bool IsAsmFunction(void) const { return m_scope->IsAsmFunction(); }
 
+  bool NeedsContext(void) const { return m_scope ->NeedsContext(); }
+
+  py::object GetInner(void) const { v8i::Scope *scope = m_scope->inner_scope(); return scope ? py::object(CAstScope(scope)) : py::object(); }
+  py::object GetSibling(void) const { v8i::Scope *scope = m_scope->sibling(); return scope ? py::object(CAstScope(scope)) : py::object(); }
   py::object GetOuter(void) const { v8i::Scope *scope = m_scope->outer_scope(); return scope ? py::object(CAstScope(scope)) : py::object(); }
 
   py::list GetDeclarations(void) const { return to_python(m_scope->zone(), m_scope->declarations()); }
 
   py::object GetReceiver(void) const;
-  py::object GetFunction(void) const { return to_python(m_scope->zone(), m_scope->function()); }
   int GetParametersNumer(void) const { return m_scope->num_parameters(); }
   CAstVariable GetParameter(int index) const;
   py::object GetArguments(void) const;
@@ -133,16 +140,21 @@ public:
 
   v8i::Variable *GetVariable(void) const { return m_var; }
 
-  bool IsValidLeftHandSide(void) const { return m_var->IsValidLeftHandSide(); }
-
   CAstScope scope(void) const { return CAstScope(m_var->scope()); }
   py::object name(void) const { return to_python(m_var->name()); }
   v8i::VariableMode mode(void) const { return m_var->mode(); }
 
+  bool IsParameter(void) const { return m_var->IsParameter(); }
+  bool IsUnallocated(void) const { return m_var->IsUnallocated(); }
+  bool IsExport(void) const { return m_var->IsExport(); }
+
+  bool is_used(void) const { return m_var->is_used(); }
   bool is_this(void) const { return m_var->is_this(); }
-  bool is_arguments(void) const { return m_var->is_arguments(); }
-  bool is_possibly_eval(void) const;
-  v8i::Variable::Location location(void) const { return m_var->location(); }
+  bool is_function(void) const { return m_var->is_function(); }
+
+  v8i::VariableLocation location(void) const { return m_var->location(); }
+  v8i::VariableKind kind(void) const { return m_var->kind(); }
+
   int index(void) const { return m_var->index(); }
 };
 
@@ -226,11 +238,9 @@ class CAstBlock : public CAstBreakableStatement
 public:
   CAstBlock(v8i::Zone *zone, v8i::Block *block) : CAstBreakableStatement(zone, block) {}
 
-  void AddStatement(CAstStatement& stmt) { as<v8i::Block>()->AddStatement(stmt.as<v8i::Statement>(), v8i::Isolate::Current()->runtime_zone()); }
+  CAstScope GetScope(void) const { return CAstScope(as<v8i::Block>()->scope()); }
 
   py::list GetStatements(void) { return to_python(m_zone, as<v8i::Block>()->statements()); }
-
-  bool IsInitializerBlock(void) const { return as<v8i::Block>()->is_initializer_block(); }
 };
 
 class CAstDeclaration : public CAstNode
@@ -239,7 +249,6 @@ public:
   CAstDeclaration(v8i::Zone *zone, v8i::Declaration *decl) : CAstNode(zone, decl) {}
 
   py::object GetProxy(void) const;
-  v8i::VariableMode GetMode(void) const { return as<v8i::Declaration>()->mode(); }
   CAstScope GetScope(void) const { return CAstScope(as<v8i::Declaration>()->scope()); }
 };
 
@@ -252,80 +261,26 @@ public:
 class CAstFunctionDeclaration : public CAstDeclaration
 {
 public:
-	CAstFunctionDeclaration(v8i::Zone *zone, v8i::FunctionDeclaration *decl) : CAstDeclaration(zone, decl) {}
+  CAstFunctionDeclaration(v8i::Zone *zone, v8i::FunctionDeclaration *decl) : CAstDeclaration(zone, decl) {}
 
-	py::object GetFunction(void) const { return to_python(m_zone, as<v8i::FunctionDeclaration>()->fun()); }
+  py::object GetFunction(void) const { return to_python(m_zone, as<v8i::FunctionDeclaration>()->fun()); }
 };
 
-class CAstModule : public CAstNode
+// TODO see src/ast/modules.h
+class CModuleDescriptor
 {
-public:
-  CAstModule(v8i::Zone *zone, v8i::Module *mod) : CAstNode(zone, mod) {}
+  protected:
+    v8i::Zone *m_zone;
+    v8i::ModuleDescriptor *m_module_descriptor;
 
-  py::object GetBody(void) const { return to_python(m_zone, as<v8i::ModuleLiteral>()->body()); }
-};
+    CModuleDescriptor(v8i::Zone *zone) : m_zone(zone) {}
 
-class CAstModuleLiteral : public CAstModule
-{
-public:
-  CAstModuleLiteral(v8i::Zone *zone, v8i::ModuleLiteral *mod) : CAstModule(zone, mod) {}
-};
+  public:
+    virtual ~CModuleDescriptor() {}
 
-class CAstModuleVariable : public CAstModule
-{
-public:
-  CAstModuleVariable(v8i::Zone *zone, v8i::ModuleVariable *mod) : CAstModule(zone, mod) {}
-
-  py::object GetProxy(void) const { return to_python(m_zone, as<v8i::ModuleVariable>()->proxy()); }
-};
-
-class CAstModulePath : public CAstModule
-{
-public:
-  CAstModulePath(v8i::Zone *zone, v8i::ModulePath *mod) : CAstModule(zone, mod) {}
-
-  py::object GetModule(void) const { return to_python(m_zone, as<v8i::ModulePath>()->module()); }
-  const std::string GetName(void) const { return to_string(as<v8i::ModulePath>()->name()); }
-};
-
-class CAstModuleUrl : public CAstModule
-{
-public:
-  CAstModuleUrl(v8i::Zone *zone, v8i::ModuleUrl *mod) : CAstModule(zone, mod) {}
-
-  const std::string GetUrl(void) const { return to_string(as<v8i::ModuleUrl>()->url()); }
-};
-
-class CAstModuleDeclaration : public CAstDeclaration
-{
-public:
-  CAstModuleDeclaration(v8i::Zone *zone, v8i::ModuleDeclaration *decl) : CAstDeclaration(zone, decl) {}
-
-  py::object GetModule(void) const { return to_python(m_zone, as<v8i::ModuleDeclaration>()->module()); }
-};
-
-class CAstImportDeclaration : public CAstDeclaration
-{
-public:
-	CAstImportDeclaration(v8i::Zone *zone, v8i::ImportDeclaration *decl) : CAstDeclaration(zone, decl) {}
-
-	py::object GetModule(void) const { return to_python(m_zone, as<v8i::ImportDeclaration>()->module()); }
-};
-
-class CAstExportDeclaration : public CAstDeclaration
-{
-public:
-	CAstExportDeclaration(v8i::Zone *zone, v8i::ExportDeclaration *decl) : CAstDeclaration(zone, decl) {}
-};
-
-class CAstModuleStatement : public CAstStatement
-{
-public:
-    CAstModuleStatement(v8i::Zone *zone, v8i::ModuleStatement *stat) : CAstStatement(zone, stat) {}
-
-    py::object GetProxy(void) const { return to_python(m_zone, as<v8i::ModuleStatement>()->proxy()); }
-
-    py::object GetBody(void) const { return to_python(m_zone, as<v8i::ModuleStatement>()->body()); }
+    // AddImport
+    // AddStarImport
+    // ...
 };
 
 class CAstIterationStatement : public CAstBreakableStatement
@@ -334,6 +289,9 @@ protected:
   CAstIterationStatement(v8i::Zone *zone, v8i::IterationStatement *stat) : CAstBreakableStatement(zone, stat) {}
 public:
   py::object GetBody(void) const { return to_python(m_zone, as<v8i::IterationStatement>()->body()); }
+
+  int GetYieldCount(void) const { return as<v8i::IterationStatement>()->yield_count(); }
+  int GetFirstYieldId(void) const { return as<v8i::IterationStatement>()->first_yield_id(); }
 
   CAstLabel GetContinueTarget(void) { return CAstLabel(as<v8i::IterationStatement>()->continue_target()); }
 };
@@ -362,20 +320,12 @@ public:
   py::object GetInit(void) const { return to_python(m_zone, as<v8i::ForStatement>()->init()); }
   py::object GetCondition(void) const { return to_python(m_zone, as<v8i::ForStatement>()->cond()); }
   py::object GetNext(void) const { return to_python(m_zone, as<v8i::ForStatement>()->next()); }
-
-  CAstVariable GetLoopVariable(void) const { return CAstVariable(as<v8i::ForStatement>()->loop_variable()); }
-  void SetLoopVariable(CAstVariable& var) { as<v8i::ForStatement>()->set_loop_variable(var.GetVariable()); }
-
-  bool IsFastLoop(void) const { return as<v8i::ForStatement>()->is_fast_smi_loop(); }
 };
 
 class CAstForEachStatement : public CAstIterationStatement
 {
 public:
   CAstForEachStatement(v8i::Zone *zone, v8i::ForEachStatement *stat) : CAstIterationStatement(zone, stat) {}
-
-  py::object GetEach(void) const { return to_python(m_zone, as<v8i::ForEachStatement>()->each()); }
-  py::object GetSubject(void) const { return to_python(m_zone, as<v8i::ForEachStatement>()->subject()); }
 };
 
 class CAstForInStatement : public CAstForEachStatement
@@ -391,7 +341,7 @@ class CAstForOfStatement : public CAstForEachStatement
 public:
   CAstForOfStatement(v8i::Zone *zone, v8i::ForOfStatement *stat) : CAstForEachStatement(zone, stat) {}
 
-  py::object GetIterable(void) const { return to_python(m_zone, as<v8i::ForOfStatement>()->iterable()); }
+  py::object GetIterator(void) const { return to_python(m_zone, as<v8i::ForOfStatement>()->iterator()); }
   py::object AssignIterator(void) const { return to_python(m_zone, as<v8i::ForOfStatement>()->assign_iterator()); }
   py::object NextResult(void) const { return to_python(m_zone, as<v8i::ForOfStatement>()->next_result()); }
   py::object ResultDone(void) const { return to_python(m_zone, as<v8i::ForOfStatement>()->result_done()); }
@@ -404,6 +354,8 @@ public:
   CAstExpressionStatement(v8i::Zone *zone, v8i::ExpressionStatement *stat) : CAstStatement(zone, stat) {}
 
   py::object GetExpression(void) const { return to_python(m_zone, as<v8i::ExpressionStatement>()->expression()); }
+  bool IsJump(void) const { return as<v8i::ExpressionStatement>()->IsJump(); }
+
 };
 
 class CAstContinueStatement : public CAstStatement
@@ -477,14 +429,6 @@ public:
   py::object GetElseStatement(void) const { return to_python(m_zone, as<v8i::IfStatement>()->else_statement()); }
 };
 
-class CAstTargetCollector : public CAstNode
-{
-public:
-  CAstTargetCollector(v8i::Zone *zone, v8i::TargetCollector *collector) : CAstNode(zone, collector) {}
-
-  py::list GetTargets(void) const;
-};
-
 class CAstTryStatement : public CAstStatement
 {
 protected:
@@ -530,9 +474,11 @@ public:
   CAstLiteral(v8i::Zone *zone, v8i::Literal *lit) : CAstExpression(zone, lit) {}
 
   const std::string AsPropertyName(void) const { return to_string(as<v8i::Literal>()->AsPropertyName()); }
-  bool IsNull(void) const { return as<v8i::Literal>()->IsNull(); }
-  bool IsTrue(void) const { return as<v8i::Literal>()->IsTrue(); }
-  bool IsFalse(void) const { return as<v8i::Literal>()->IsFalse(); }
+  bool IsPropertyName(void) const { return as<v8i::Literal>()->IsPropertyName(); }
+
+  // TODO
+  // value(), raw_value()
+
 };
 
 class CAstMaterializedLiteral : public CAstExpression
@@ -574,7 +520,7 @@ public:
   CAstRegExpLiteral(v8i::Zone *zone, v8i::RegExpLiteral *lit) : CAstMaterializedLiteral(zone, lit) {}
 
   const std::string GetPattern(void) const { return to_string(as<v8i::RegExpLiteral>()->pattern()); }
-  const std::string GetFlags(void) const { return to_string(as<v8i::RegExpLiteral>()->flags()); }
+  int GetFlags(void) const { return as<v8i::RegExpLiteral>()->flags(); }
 };
 
 class CAstArrayLiteral : public CAstMaterializedLiteral
@@ -590,11 +536,13 @@ class CAstVariableProxy : public CAstExpression
 public:
   CAstVariableProxy(v8i::Zone *zone, v8i::VariableProxy *proxy) : CAstExpression(zone, proxy) {}
 
-  bool IsValidLeftHandSide(void) const { return as<v8i::VariableProxy>()->IsValidLeftHandSide(); }
-  bool IsArguments(void) const { return as<v8i::VariableProxy>()->IsArguments(); }
   const std::string name(void) const { return to_string(as<v8i::VariableProxy>()->name()); }
   py::object var(void) const { v8i::Variable *var = as<v8i::VariableProxy>()->var(); return var ? py::object(CAstVariable(var)) : py::object();  }
   bool is_this() const  { return as<v8i::VariableProxy>()->is_this(); }
+  bool is_assigned() const  { return as<v8i::VariableProxy>()->is_assigned(); }
+  bool is_resolved() const  { return as<v8i::VariableProxy>()->is_resolved(); }
+  bool is_new_target() const  { return as<v8i::VariableProxy>()->is_new_target(); }
+
 };
 
 class CAstProperty : public CAstExpression
@@ -626,8 +574,9 @@ class CAstCallRuntime : public CAstExpression
 public:
   CAstCallRuntime(v8i::Zone *zone, v8i::CallRuntime *call) : CAstExpression(zone, call) {}
 
-  const std::string GetName(void) const { return to_string(as<v8i::CallRuntime>()->name()); }
+  const std::string GetDebugName(void) const { return as<v8i::CallRuntime>()->debug_name(); }
   py::list GetArguments(void) const { return to_python(m_zone, as<v8i::CallRuntime>()->arguments()); }
+  int GetContextIndex(void) const { return as<v8i::CallRuntime>()->context_index(); }
   bool IsJSRuntime(void) const { return as<v8i::CallRuntime>()->is_jsruntime(); }
 };
 
@@ -704,8 +653,8 @@ class CAstYield : public CAstExpression
 public:
   CAstYield(v8i::Zone *zone, v8i::Yield *yield) : CAstExpression(zone, yield) {}
 
+  py::object generator_object(void) const { return to_python(m_zone, as<v8i::Yield>()->generator_object()); }
   py::object expression(void) const { return to_python(m_zone, as<v8i::Yield>()->expression()); }
-  bool yield_kind(void) const { return as<v8i::Yield>()->yield_kind(); }
 };
 
 class CAstThrow : public CAstExpression
@@ -725,14 +674,14 @@ public:
   CAstScope GetScope(void) const { return CAstScope(as<v8i::FunctionLiteral>()->scope()); }
   py::list GetBody(void) const { return to_python(m_zone, as<v8i::FunctionLiteral>()->body()); }
 
+  int GetFunctionTokenPosition(void) const { return as<v8i::FunctionLiteral>()->function_token_position(); }
   int GetStartPosition(void) const { return as<v8i::FunctionLiteral>()->start_position(); }
   int GetEndPosition(void) const { return as<v8i::FunctionLiteral>()->end_position(); }
-  bool IsExpression(void) const { return as<v8i::FunctionLiteral>()->is_expression(); }
+  int GetSourceSize(void) const { return as<v8i::FunctionLiteral>()->SourceSize(); }
 
   const std::string ToAST(void) const { return v8i::AstPrinter(m_zone).PrintProgram(as<v8i::FunctionLiteral>()); }
   const std::string ToJSON(void) const { return v8i::JsonAstBuilder(m_zone).BuildProgram(as<v8i::FunctionLiteral>()); }
 };
-
 
 class CAstNativeFunctionLiteral : public CAstExpression
 {
@@ -748,36 +697,43 @@ public:
   CAstThisFunction(v8i::Zone *zone, v8i::ThisFunction *func) : CAstExpression(zone, func) {}
 };
 
-class CAstVisitor : public v8i::AstVisitor
+class CAstVisitor : public v8i::AstVisitor<CAstVisitor>
 {
   py::object m_handler;
 public:
-  CAstVisitor(v8i::Zone *zone, py::object handler) : m_handler(handler)
+  CAstVisitor(v8i::Isolate *isolate, py::object handler) : m_handler(handler)
   {
-    InitializeAstVisitor(zone);
+    InitializeAstVisitor(isolate);
   }
-#define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node) { \
+/*#define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node) { \
   if (::PyObject_HasAttrString(m_handler.ptr(), "on"#type)) { \
     py::object callback = m_handler.attr("on"#type); \
     if (::PyCallable_Check(callback.ptr())) { \
-      callback(py::object(CAst##type(zone(), node))); }; } }
-
+      callback(py::object(CAst##type(zone(), node))); \
+    }; } }
   AST_NODE_LIST(DECLARE_VISIT)
-
 #undef DECLARE_VISIT
-
+*/
+#define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node);
+  AST_NODE_LIST(DECLARE_VISIT)
+#undef DECLARE_VISIT
   DEFINE_AST_VISITOR_SUBCLASS_MEMBERS();
 };
 
-struct CAstObjectCollector : public v8i::AstVisitor
+struct CAstObjectCollector : public v8i::AstVisitor<CAstObjectCollector>
 {
   py::object m_obj;
 
-  CAstObjectCollector(v8i::Zone *zone) {
-    InitializeAstVisitor(zone);
+  CAstObjectCollector(v8i::Isolate *isolate) {
+    InitializeAstVisitor(isolate);
   }
 
-#define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node) { m_obj = py::object(CAst##type(zone(), node)); }
+/*
+#define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node) { m_obj = py::object(CAst##type(node->zone(), node)); }
+  AST_NODE_LIST(DECLARE_VISIT)
+#undef DECLARE_VISIT
+*/
+#define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node);
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
@@ -796,15 +752,20 @@ inline py::object to_python(v8i::Zone *zone, T *node)
   return collector.m_obj;
 }
 
-struct CAstListCollector : public v8i::AstVisitor
+struct CAstListCollector : public v8i::AstVisitor<CAstListCollector>
 {
   py::list m_nodes;
 
-  CAstListCollector(v8i::Zone *zone) {
-    InitializeAstVisitor(zone);
+  CAstListCollector(v8i::Isolate *isolate) {
+    InitializeAstVisitor(isolate);
   }
 
+/*
 #define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node) { m_nodes.append(py::object(CAst##type(zone(), node))); }
+  AST_NODE_LIST(DECLARE_VISIT)
+#undef DECLARE_VISIT
+*/
+#define DECLARE_VISIT(type) virtual void Visit##type(v8i::type* node);
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
@@ -843,9 +804,9 @@ inline py::list to_python(v8i::ZoneList<T *>* lst)
 
 inline py::object CAstScope::GetReceiver(void) const
 {
-  if (m_scope->receiver())
+  if (m_scope->GetDeclarationScope()->receiver())
   {
-    CAstVariable proxy(m_scope->receiver());
+    CAstVariable proxy(m_scope->GetDeclarationScope()->receiver());
 
     return to_python(proxy);
   }
@@ -854,24 +815,24 @@ inline py::object CAstScope::GetReceiver(void) const
 }
 inline CAstVariable CAstScope::GetParameter(int index) const
 {
-  return CAstVariable(m_scope->parameter(index));
+  return CAstVariable(m_scope->GetDeclarationScope()->parameter(index));
 }
 inline py::object CAstScope::GetArguments(void) const
 {
-  if (m_scope->arguments())
+  if (m_scope->GetDeclarationScope()->arguments())
   {
-    CAstVariable var(m_scope->arguments());
+    CAstVariable var(m_scope->GetDeclarationScope()->arguments());
 
     return to_python(var);
   }
 
   return py::object();
 }
-
-inline void CAstNode::Visit(py::object handler) { CAstVisitor(m_zone, handler).Visit(m_node); }
+// FIXME m_zone - > isolate in Nodes
+inline void CAstNode::Visit(py::object handler) { CAstVisitor(v8::Isolate::GetCurrent(), handler).Visit(m_node); }
 
 inline py::object CAstDeclaration::GetProxy(void) const { return to_python(m_zone, as<v8i::Declaration>()->proxy()); }
 
-inline py::list CAstTargetCollector::GetTargets(void) const { return to_python(as<v8i::TargetCollector>()->targets()); }
+// inline py::list CAstTargetCollector::GetTargets(void) const { return to_python(as<v8i::TargetCollector>()->targets()); }
 
-inline py::list CAstTryStatement::GetEscapingTargets(void) const { return to_python(as<v8i::TryStatement>()->escaping_targets()); }
+//inline py::list CAstTryStatement::GetEscapingTargets(void) const { return to_python(as<v8i::TryStatement>()->escaping_targets()); }

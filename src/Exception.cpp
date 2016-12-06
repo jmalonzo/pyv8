@@ -83,7 +83,7 @@ CJavascriptStackTracePtr CJavascriptStackTrace::GetCurrentStackTrace(
 
   v8::TryCatch try_catch;
 
-  v8::Handle<v8::StackTrace> st = v8::StackTrace::CurrentStackTrace(isolate, frame_limit, options);
+  v8::Local<v8::StackTrace> st = v8::StackTrace::CurrentStackTrace(isolate, frame_limit, options);
 
   if (st.IsEmpty()) CJavascriptException::ThrowIf(isolate, try_catch);
 
@@ -96,7 +96,7 @@ CJavascriptStackFramePtr CJavascriptStackTrace::GetFrame(size_t idx) const
 
   v8::TryCatch try_catch;
 
-  v8::Handle<v8::StackFrame> frame = Handle()->GetFrame(idx);
+  v8::Local<v8::StackFrame> frame = Handle()->GetFrame(idx);
 
   if (frame.IsEmpty()) CJavascriptException::ThrowIf(m_isolate, try_catch);
 
@@ -113,7 +113,7 @@ void CJavascriptStackTrace::Dump(std::ostream& os) const
 
   for (int i=0; i<GetFrameCount(); i++)
   {
-    v8::Handle<v8::StackFrame> frame = GetFrame(i)->Handle();
+    v8::Local<v8::StackFrame> frame = GetFrame(i)->Handle();
 
     v8::String::Utf8Value funcName(frame->GetFunctionName()), scriptName(frame->GetScriptName());
 
@@ -163,7 +163,7 @@ const std::string CJavascriptException::GetName(void)
 
   v8::HandleScope handle_scope(m_isolate);
 
-  v8::String::Utf8Value msg(v8::Handle<v8::String>::Cast(Exception()->ToObject()->Get(v8::String::NewFromUtf8(m_isolate, "name"))));
+  v8::String::Utf8Value msg(v8::Local<v8::String>::Cast(Exception()->ToObject()->Get(v8::String::NewFromUtf8(m_isolate, "name"))));
 
   return std::string(*msg, msg.length());
 }
@@ -175,7 +175,7 @@ const std::string CJavascriptException::GetMessage(void)
 
   v8::HandleScope handle_scope(m_isolate);
 
-  v8::String::Utf8Value msg(v8::Handle<v8::String>::Cast(Exception()->ToObject()->Get(v8::String::NewFromUtf8(m_isolate, "message"))));
+  v8::String::Utf8Value msg(v8::Local<v8::String>::Cast(Exception()->ToObject()->Get(v8::String::NewFromUtf8(m_isolate, "message"))));
 
   return std::string(*msg, msg.length());
 }
@@ -259,7 +259,7 @@ const std::string CJavascriptException::GetStackTrace(void)
 
   if (!m_stack.IsEmpty())
   {
-    v8::String::Utf8Value stack(v8::Handle<v8::String>::Cast(Stack()));
+    v8::String::Utf8Value stack(v8::Local<v8::String>::Cast(Stack()));
 
     return std::string(*stack, stack.length());
   }
@@ -279,7 +279,7 @@ const std::string CJavascriptException::Extract(v8::Isolate *isolate, v8::TryCat
   if (*msg)
     oss << std::string(*msg, msg.length());
 
-  v8::Handle<v8::Message> message = try_catch.Message();
+  v8::Local<v8::Message> message = try_catch.Message();
 
   if (!message.IsEmpty())
   {
@@ -324,16 +324,16 @@ void CJavascriptException::ThrowIf(v8::Isolate *isolate, v8::TryCatch& try_catch
     v8::HandleScope handle_scope(isolate);
 
     PyObject *type = NULL;
-    v8::Handle<v8::Value> obj = try_catch.Exception();
+    v8::Local<v8::Value> obj = try_catch.Exception();
 
     if (obj->IsObject())
     {
-      v8::Handle<v8::Object> exc = obj->ToObject();
-      v8::Handle<v8::String> name = v8::String::NewFromUtf8(isolate, "name");
+      v8::Local<v8::Object> exc = obj->ToObject();
+      v8::Local<v8::String> name = v8::String::NewFromUtf8(isolate, "name");
 
       if (exc->Has(name))
       {
-        v8::String::Utf8Value s(v8::Handle<v8::String>::Cast(exc->Get(name)));
+        v8::String::Utf8Value s(v8::Local<v8::String>::Cast(exc->Get(name)));
 
         for (size_t i=0; i<_countof(SupportErrors); i++)
         {
@@ -359,19 +359,28 @@ void ExceptionTranslator::Translate(CJavascriptException const& ex)
   }
   else
   {
-    v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    v8::HandleScope handle_scope(isolate);
 
     if (!ex.Exception().IsEmpty() && ex.Exception()->IsObject())
     {
-      v8::Handle<v8::Object> obj = ex.Exception()->ToObject();
+      v8::Local<v8::Object> obj = ex.Exception()->ToObject();
 
-      v8::Handle<v8::Value> exc_type = obj->GetHiddenValue(v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), "exc_type"));
-      v8::Handle<v8::Value> exc_value = obj->GetHiddenValue(v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), "exc_value"));
+      v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
-      if (!exc_type.IsEmpty() && !exc_value.IsEmpty())
-      {
-        std::auto_ptr<py::object> type(static_cast<py::object *>(v8::Handle<v8::External>::Cast(exc_type)->Value())),
-                                  value(static_cast<py::object *>(v8::Handle<v8::External>::Cast(exc_value)->Value()));
+      v8::Local<v8::Private> exc_type_key = v8::Private::ForApi(isolate, v8::String::NewFromUtf8(isolate, "exc_type"));
+      v8::Local<v8::Private> exc_value_key = v8::Private::ForApi(isolate, v8::String::NewFromUtf8(isolate, "exc_value"));
+
+      v8::Maybe<bool> has_exc_type = obj->HasPrivate(context, exc_type_key);
+      v8::Maybe<bool> has_exc_value = obj->HasPrivate(context, exc_value_key);
+      if (!((has_exc_type.IsJust() && has_exc_type.FromJust()) || (has_exc_value.IsJust() && has_exc_value.FromJust())))
+        return; // v8::Local<v8::Value>();
+
+      v8::Local<v8::Value> exc_type;
+      v8::Local<v8::Value> exc_value;
+      if (obj->GetPrivate(context, exc_type_key).ToLocal(&exc_type) && obj->GetPrivate(context, exc_value_key).ToLocal(&exc_value)) {
+        std::unique_ptr<py::object> type(static_cast<py::object *>(v8::Local<v8::External>::Cast(exc_type)->Value())),
+                                    value(static_cast<py::object *>(v8::Local<v8::External>::Cast(exc_value)->Value()));
 
         ::PyErr_SetObject(type->ptr(), value->ptr());
 

@@ -1,3 +1,5 @@
+#ifdef SUPPORT_AST
+
 #include "AST.h"
 
 #include "V8Internal.h"
@@ -414,3 +416,5 @@ void CAstNode::Expose(void)
   py::class_<CAstThisFunction, py::bases<CAstExpression> >("AstThisFunction", py::no_init)
     ;
 }
+
+#endif /* SUPPORT_AST */

@@ -226,15 +226,20 @@ void CPythonObject::ThrowIf(v8::Isolate* isolate)
     // FIXME How to trace the lifecycle of exception? and when to delete those object in the hidden value?
 
   #ifdef SUPPORT_TRACE_EXCEPTION_LIFECYCLE
-    error->ToObject()->SetHiddenValue(v8::String::NewFromUtf8(isolate, "exc_type"),
-                                      v8::External::New(isolate, ObjectTracer::Trace(error, new py::object(type)).Object()));
-    error->ToObject()->SetHiddenValue(v8::String::NewFromUtf8(isolate, "exc_value"),
-                                      v8::External::New(isolate, ObjectTracer::Trace(error, new py::object(value)).Object()));
+    SetHiddenValue(isolate, error->ToObject(),
+                   v8::String::NewFromUtf8(isolate, "exc_type"),
+                   v8::External::New(isolate, ObjectTracer::Trace(error, new py::object(type)).Object()))
+
+    SetHiddenValue(isolate, error->ToObject(),
+                   v8::String::NewFromUtf8(isolate, "exc_value"),
+                   v8::External::New(isolate, ObjectTracer::Trace(error, new py::object(value)).Object()));
   #else
-    error->ToObject()->SetHiddenValue(v8::String::NewFromUtf8(isolate, "exc_type"),
-                                      v8::External::New(isolate, new py::object(type)));
-    error->ToObject()->SetHiddenValue(v8::String::NewFromUtf8(isolate, "exc_value"),
-                                      v8::External::New(isolate, new py::object(value)));
+    SetHiddenValue(isolate, error->ToObject(),
+                   v8::String::NewFromUtf8(isolate, "exc_type"),
+                   v8::External::New(isolate, new py::object(type)));
+    SetHiddenValue(isolate, error->ToObject(),
+                   v8::String::NewFromUtf8(isolate, "exc_value"),
+                   v8::External::New(isolate, new py::object(value)));
   #endif
   }
 
@@ -444,7 +449,7 @@ void CPythonObject::NamedDeleter(v8::Local<v8::String> prop, const v8::PropertyC
   END_HANDLE_EXCEPTION(v8::Handle<v8::Boolean>())
 }
 
-#pragma GCC diagnostic ignored "-Wdeprecated-writable-strings"
+// #pragma GCC diagnostic ignored "-Wdeprecated-writable-strings"
 
 void CPythonObject::NamedEnumerator(const v8::PropertyCallbackInfo<v8::Array>& info)
 {
@@ -1404,14 +1409,14 @@ py::object CJavascriptArray::SetItem(py::object key, py::object value)
       Py_ssize_t itemSize = PySequence_Fast_GET_SIZE(value.ptr());
       PyObject **items = PySequence_Fast_ITEMS(value.ptr());
 
-      Py_ssize_t arrayLen = v8::Handle<v8::Array>::Cast(Object())->Length();
+      Py_ssize_t arrayLen = v8::Local<v8::Array>::Cast(Object())->Length();
       Py_ssize_t start, stop, step, sliceLen;
 
       if (0 == ::PySlice_GetIndicesEx(PySlice_Cast(key.ptr()), arrayLen, &start, &stop, &step, &sliceLen))
       {
         if (itemSize != sliceLen)
         {
-          v8i::Handle<v8i::JSArray> array = v8::Utils::OpenHandle(*Object());
+          v8i::Handle<v8i::JSArray> array = v8i::Handle<v8i::JSArray>::cast(v8::Utils::OpenHandle(*Object()));
 
           array->set_length(v8i::Smi::FromInt(arrayLen - sliceLen + itemSize));
 
@@ -1489,7 +1494,7 @@ py::object CJavascriptArray::DelItem(py::object key)
         Object()->Delete((uint32_t)idx);
       }
 
-      v8i::Handle<v8i::JSArray> array = v8::Utils::OpenHandle(*Object());
+      v8i::Handle<v8i::JSArray> array = v8i::Handle<v8i::JSArray>::cast(v8::Utils::OpenHandle(*Object()));
 
       array->set_length(v8i::Smi::FromInt(arrayLen - sliceLen));
     }
@@ -1808,7 +1813,7 @@ void ObjectTracer::Dispose(void)
 
 ObjectTracer& ObjectTracer::Trace(v8::Handle<v8::Value> handle, py::object *object)
 {
-  std::auto_ptr<ObjectTracer> tracer(new ObjectTracer(handle, object));
+  std::unique_ptr<ObjectTracer> tracer(new ObjectTracer(handle, object));
 
   tracer->Trace();
 
@@ -1817,16 +1822,16 @@ ObjectTracer& ObjectTracer::Trace(v8::Handle<v8::Value> handle, py::object *obje
 
 void ObjectTracer::Trace(void)
 {
-  m_handle.SetWeak(this, WeakCallback);
+  m_handle.SetWeak(this, WeakCallback, v8::WeakCallbackType::kParameter);
 
   m_living->insert(std::make_pair(m_object->ptr(), this));
 }
 
-void ObjectTracer::WeakCallback(const v8::WeakCallbackData<v8::Value, ObjectTracer>& data)
+void ObjectTracer::WeakCallback(const v8::WeakCallbackInfo<ObjectTracer>& data)
 {
   std::auto_ptr<ObjectTracer> tracer(data.GetParameter());
 
-  assert(data.GetValue() == tracer->m_handle);
+  assert(data.GetParameter()->m_handle == tracer->m_handle);
 }
 
 LivingMap * ObjectTracer::GetLivingMapping(void)
@@ -1835,7 +1840,7 @@ LivingMap * ObjectTracer::GetLivingMapping(void)
 
   v8::Handle<v8::Context> ctxt = v8::Isolate::GetCurrent()->GetCurrentContext();
 
-  v8::Handle<v8::Value> value = ctxt->Global()->GetHiddenValue(v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), "__living__"));
+  v8::Handle<v8::Value> value = GetHiddenValue(v8::Isolate::GetCurrent(), ctxt->Global(), v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), "__living__"));
 
   if (!value.IsEmpty())
   {
@@ -1887,8 +1892,10 @@ ContextTracer::~ContextTracer(void)
   }
 }
 
-void ContextTracer::WeakCallback(const v8::WeakCallbackData<v8::Context, ContextTracer>& data)
+void ContextTracer::WeakCallback(const v8::WeakCallbackInfo<ContextTracer>& data)
 {
+  delete data.GetParameter()->data;
+  data.GetParameter()->handle.Reset();
   delete data.GetParameter();
 }
 

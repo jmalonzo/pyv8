@@ -28,7 +28,7 @@
 
 # if !defined(__GNUC__) || (__GNUC__ <= 4 && __GNUC_MINOR__ < 7)
 
-#include <cmath>
+// #include <cmath>
 using std::isnan;
 
 #ifndef isfinite
@@ -113,12 +113,23 @@ namespace py = boost::python;
 
 #endif
 
-v8::Handle<v8::String> ToString(const std::string& str);
-v8::Handle<v8::String> ToString(const std::wstring& str);
-v8::Handle<v8::String> ToString(py::object str);
+v8::Local<v8::String> ToString(const std::string& str);
+v8::Local<v8::String> ToString(const std::wstring& str);
+v8::Local<v8::String> ToString(py::object str);
 
-v8::Handle<v8::String> DecodeUtf8(const std::string& str);
+v8::Local<v8::String> DecodeUtf8(const std::string& str);
 const std::string EncodeUtf8(const std::wstring& str);
+
+// For compat
+// https://github.com/node-inspector/v8-profiler/pull/96/files
+v8::Local<v8::Value> GetHiddenValue(v8::Isolate* isolate,
+                                    v8::Local<v8::Object> object,
+                                    v8::Local<v8::String> key);
+
+void SetHiddenValue(v8::Isolate* isolate,
+                    v8::Local<v8::Object> object,
+                    v8::Local<v8::String> key,
+                    v8::Local<v8::Value> value);
 
 struct CPythonGIL
 {
@@ -134,7 +145,7 @@ struct CPythonGIL
 
 typedef v8::Persistent<v8::Object> V8Object_t;
 typedef v8::Persistent<v8::Object> V8Array_t;
-typedef v8::Handle<v8::Script> V8Script_t;
+typedef v8::Local<v8::Script> V8Script_t;
 typedef const char * string_t;
 
 #include "probes.h"

@@ -1,11 +1,11 @@
 #pragma once
 
-#include <src/ast.h>
+#include <src/ast/ast.h>
 
 namespace v8 {
   namespace internal {
 
-class PrettyPrinter: public AstVisitor {
+class PrettyPrinter: public AstVisitor<PrettyPrinter> {
 public:
   PrettyPrinter(Zone* zone);
   virtual ~PrettyPrinter();
@@ -36,7 +36,7 @@ protected:
   const char* Output() const { return output_; }
 
   virtual void PrintStatements(ZoneList<Statement*>* statements);
-  void PrintLabels(ZoneStringList* labels);
+  void PrintLabels(ZoneList<const AstRawString*>* labels);
   virtual void PrintArguments(ZoneList<Expression*>* arguments);
   void PrintLiteral(Handle<Object> value, bool quote);
   void PrintParameters(Scope* scope);
@@ -75,7 +75,7 @@ private:
   void PrintLiteralWithModeIndented(const char* info,
     Variable* var,
     Handle<Object> value);
-  void PrintLabelsIndented(ZoneStringList* labels);
+  void PrintLabelsIndented(ZoneList<const AstRawString*>* labels);
 
   void inc_indent() { indent_++; }
   void dec_indent() { indent_--; }

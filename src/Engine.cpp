@@ -14,6 +14,8 @@
   #include "AST.h"
 #endif
 
+#ifdef SUPPORT_GC_NOTIFICATIONS
+
 struct MemoryAllocationCallbackBase
 {
   virtual void Set(py::object callback) = 0;
@@ -69,8 +71,7 @@ public:
   {
 #define ADD_CALLBACK_STUB(space, action) s_callbacks[std::make_pair(space, action)] = new MemoryAllocationCallbackStub<space, action>()
 
-#define OBJECT_SPACES (kObjectSpaceNewSpace) (kObjectSpaceOldPointerSpace) (kObjectSpaceOldDataSpace) \
-(kObjectSpaceCodeSpace) (kObjectSpaceMapSpace) (kObjectSpaceLoSpace) (kObjectSpaceAll)
+#define OBJECT_SPACES (kObjectSpaceNewSpace) (kObjectSpaceOldSpace) (kObjectSpaceCodeSpace) (kObjectSpaceMapSpace) (kObjectSpaceLoSpace) (kObjectSpaceAll)
 #define ALLOCATION_ACTIONS (kAllocationActionAllocate) (kAllocationActionFree) (kAllocationActionAll)
 
 #define ADD_CALLBACK_STUBS(r, action, space) ADD_CALLBACK_STUB(v8::space, v8::action);
@@ -88,6 +89,8 @@ public:
 
 MemoryAllocationManager::CallbackMap MemoryAllocationManager::s_callbacks;
 
+#endif
+
 void CEngine::Expose(void)
 {
 #ifndef SUPPORT_SERIALIZE
@@ -95,28 +98,41 @@ void CEngine::Expose(void)
   v8::V8::AddMessageListener(ReportMessage);
 #endif
 
+#ifdef SUPPORT_GC_NOTIFICATIONS
   MemoryAllocationManager::Init();
+
+  py::enum_<v8::GCType>("JSGarbageCollectionType")
+    .value("Scavenge", v8::kGCTypeScavenge)
+    .value("MarkSweepCompact", v8::kGCTypeMarkSweepCompact)
+    .value("IncrementalMarking", v8::kGCTypeIncrementalMarking)
+    .value("ProcessWeakCallbacks", v8::kGCTypeProcessWeakCallbacks)
+    .value("All", v8::kGCTypeAll);
+
+  py::enum_<v8::GCCallbackFlags>("JSGarbageCollectionCallbackFlags")
+    .value("NoFlag", v8::kNoGCCallbackFlags)
+    .value("ConstructRetainedObjectInfos", v8::kGCCallbackFlagConstructRetainedObjectInfos)
+    .value("Forced", v8::kGCCallbackFlagForced)
+    .value("SynchronousPhantomCallbackProcessing", v8::kGCCallbackFlagSynchronousPhantomCallbackProcessing)
+    .value("CollectAllAvailableGarbage", v8::kGCCallbackFlagCollectAllAvailableGarbage)
+    .value("CollectAllExternalMemory", v8::kGCCallbackFlagCollectAllExternalMemory);
 
   py::enum_<v8::ObjectSpace>("JSObjectSpace")
     .value("New", v8::kObjectSpaceNewSpace)
-
-    .value("OldPointer", v8::kObjectSpaceOldPointerSpace)
-    .value("OldData", v8::kObjectSpaceOldDataSpace)
+    .value("Old", v8::kObjectSpaceOldSpace)
     .value("Code", v8::kObjectSpaceCodeSpace)
     .value("Map", v8::kObjectSpaceMapSpace)
     .value("Lo", v8::kObjectSpaceLoSpace)
-
     .value("All", v8::kObjectSpaceAll);
 
   py::enum_<v8::AllocationAction>("JSAllocationAction")
     .value("alloc", v8::kAllocationActionAllocate)
     .value("free", v8::kAllocationActionFree)
     .value("all", v8::kAllocationActionAll);
+#endif /* SUPPORT_GC_NOTIFICATIONS */
 
   py::enum_<v8i::LanguageMode>("JSLanguageMode")
-    .value("CLASSIC", v8i::CLASSIC_MODE)
-    .value("STRICT", v8i::STRICT_MODE)
-    .value("EXTENDED", v8i::EXTENDED_MODE);
+    .value("SLOPPY", v8i::SLOPPY)
+    .value("STRICT", v8i::STRICT);
 
   py::class_<CEngine, boost::noncopyable>("JSEngine", "JSEngine is a backend Javascript engine.")
     .def(py::init<>("Create a new script engine instance."))
@@ -153,31 +169,20 @@ void CEngine::Expose(void)
          "it cannot be reinitialized.")
     .staticmethod("dispose")
 
-    .def("idle", &v8::V8::IdleNotification,
+/*    .def("idle", &v8::Isolate::IdleNotificationDeadline,
          "Optional notification that the embedder is idle.")
     .staticmethod("idle")
 
-    .def("lowMemory", &v8::V8::LowMemoryNotification,
+    .def("lowMemory", &v8::Isolate::LowMemoryNotification,
          "Optional notification that the system is running low on memory.")
     .staticmethod("lowMemory")
-
-    .def("setMemoryLimit", &CEngine::SetMemoryLimit, (py::arg("max_young_space_size") = 0,
-                                                      py::arg("max_old_space_size") = 0,
-                                                      py::arg("max_executable_size") = 0),
-         "Specifies the limits of the runtime's memory use."
-         "You must set the heap size before initializing the VM"
-         "the size cannot be adjusted after the VM is initialized.")
-    .staticmethod("setMemoryLimit")
-
-    .def("ignoreOutOfMemoryException", &v8::V8::IgnoreOutOfMemoryException,
-         "Ignore out-of-memory exceptions.")
-    .staticmethod("ignoreOutOfMemoryException")
-
+*/
     .def("setStackLimit", &CEngine::SetStackLimit, (py::arg("stack_limit_size") = 0),
          "Uses the address of a local variable to determine the stack top now."
          "Given a size, returns an address that is that far from the current top of stack.")
     .staticmethod("setStackLimit")
 
+#ifdef SUPPORT_GC_NOTIFICATIONS
     .def("setMemoryAllocationCallback", &MemoryAllocationManager::SetCallback,
                                         (py::arg("callback"),
                                          py::arg("space") = v8::kObjectSpaceAll,
@@ -185,22 +190,17 @@ void CEngine::Expose(void)
                                         "Enables the host application to provide a mechanism to be notified "
                                         "and perform custom logging when V8 Allocates Executable Memory.")
     .staticmethod("setMemoryAllocationCallback")
-
-    .def("precompile", &CEngine::PreCompile, (py::arg("source")))
-    .def("precompile", &CEngine::PreCompileW, (py::arg("source")))
+#endif
 
     .def("compile", &CEngine::Compile, (py::arg("source"),
                                         py::arg("name") = std::string(),
                                         py::arg("line") = -1,
-                                        py::arg("col") = -1,
-                                        py::arg("precompiled") = py::object()))
+                                        py::arg("col") = -1))
     .def("compile", &CEngine::CompileW, (py::arg("source"),
                                          py::arg("name") = std::wstring(),
                                          py::arg("line") = -1,
-                                         py::arg("col") = -1,
-                                         py::arg("precompiled") = py::object()))
+                                         py::arg("col") = -1))
     ;
-
   py::class_<CScript, boost::noncopyable>("JSScript", "JSScript is a compiled JavaScript script.", py::no_init)
     .add_property("source", &CScript::GetSource, "the source code")
 
@@ -321,12 +321,13 @@ void CEngine::Deserialize(py::object snapshot)
 
 void CEngine::CollectAllGarbage(bool force_compaction)
 {
+  // This shouldn't be called or exposed. Might get removed in the future
   v8i::HandleScope handle_scope(v8i::Isolate::Current());
 
   if (force_compaction) {
-    v8i::Isolate::Current()->heap()->CollectAllAvailableGarbage();
+    v8i::Isolate::Current()->heap()->CollectAllAvailableGarbage(v8i::GarbageCollectionReason::kUnknown);
   } else {
-    v8i::Isolate::Current()->heap()->CollectAllGarbage(v8i::Heap::kMakeHeapIterableMask);
+    v8i::Isolate::Current()->heap()->CollectAllGarbage(v8i::Heap::kMakeHeapIterableMask, v8i::GarbageCollectionReason::kUnknown);
   }
 }
 
@@ -340,24 +341,13 @@ void CEngine::ReportFatalError(const char* location, const char* message)
   std::cerr << "<" << location << "> " << message << std::endl;
 }
 
-void CEngine::ReportMessage(v8::Handle<v8::Message> message, v8::Handle<v8::Value> data)
+void CEngine::ReportMessage(v8::Local<v8::Message> message, v8::Local<v8::Value> data)
 {
   v8::String::Utf8Value filename(message->GetScriptResourceName());
   int lineno = message->GetLineNumber();
   v8::String::Utf8Value sourceline(message->GetSourceLine());
 
   std::cerr << *filename << ":" << lineno << " -> " << *sourceline << std::endl;
-}
-
-bool CEngine::SetMemoryLimit(int max_young_space_size, int max_old_space_size, int max_executable_size)
-{
-  v8::ResourceConstraints limit;
-
-  if (max_young_space_size) limit.set_max_young_space_size(max_young_space_size);
-  if (max_old_space_size) limit.set_max_old_space_size(max_old_space_size);
-  if (max_executable_size) limit.set_max_executable_size(max_executable_size);
-
-  return v8::SetResourceConstraints(v8::Isolate::GetCurrent(), &limit);
 }
 
 // Uses the address of a local variable to determine the stack top now.
@@ -376,39 +366,15 @@ uint32_t *CEngine::CalcStackLimitSize(uint32_t size)
   return answer;
 }
 
-bool CEngine::SetStackLimit(uint32_t stack_limit_size)
+void CEngine::SetStackLimit(uint32_t stack_limit_size)
 {
-  v8::ResourceConstraints limit;
-
-  limit.set_stack_limit(CalcStackLimitSize(stack_limit_size));
-
-  return v8::SetResourceConstraints(v8::Isolate::GetCurrent(), &limit);
+  uintptr_t limit = reinterpret_cast<uintptr_t>(CalcStackLimitSize(stack_limit_size));
+  v8::Isolate::GetCurrent()->SetStackLimit(limit);
 }
 
-py::object CEngine::InternalPreCompile(v8::Handle<v8::String> src)
-{
-  v8::TryCatch try_catch;
-
-  std::auto_ptr<v8::ScriptData> precompiled;
-
-  Py_BEGIN_ALLOW_THREADS
-
-  precompiled.reset(v8::ScriptData::PreCompile(src));
-
-  Py_END_ALLOW_THREADS
-
-  if (!precompiled.get()) CJavascriptException::ThrowIf(m_isolate, try_catch);
-  if (precompiled->HasError()) throw CJavascriptException("fail to compile", ::PyExc_SyntaxError);
-
-  py::object obj(py::handle<>(::PyByteArray_FromStringAndSize(precompiled->Data(), precompiled->Length())));
-
-  return obj;
-}
-
-boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Handle<v8::String> src,
-                                                    v8::Handle<v8::Value> name,
-                                                    int line, int col,
-                                                    py::object precompiled)
+boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Local<v8::String> src,
+                                                    v8::Local<v8::Value> name,
+                                                    int line, int col)
 {
   v8::HandleScope handle_scope(m_isolate);
 
@@ -416,30 +382,11 @@ boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Handle<v8::String> src,
 
   v8::Persistent<v8::String> script_source(m_isolate, src);
 
-  v8::Handle<v8::Script> script;
-  v8::Handle<v8::String> source = v8::Local<v8::String>::New(m_isolate, script_source);
-  std::auto_ptr<v8::ScriptData> script_data;
+  v8::Local<v8::String> source = v8::Local<v8::String>::New(m_isolate, script_source);
 
-  if (!precompiled.is_none())
-  {
-    if (PyObject_CheckBuffer(precompiled.ptr()))
-    {
-      Py_buffer buf;
+  v8::MaybeLocal<v8::Script> script;
 
-      if (-1 == ::PyObject_GetBuffer(precompiled.ptr(), &buf, PyBUF_WRITABLE))
-      {
-        throw CJavascriptException("fail to get data from the precompiled buffer");
-      }
-
-      script_data.reset(v8::ScriptData::New((const char *)buf.buf, (int) buf.len));
-
-      ::PyBuffer_Release(&buf);
-    }
-    else
-    {
-      throw CJavascriptException("need a precompiled buffer object");
-    }
-  }
+  v8::Local<v8::Context> context(m_isolate->GetCurrentContext());
 
   Py_BEGIN_ALLOW_THREADS
 
@@ -447,13 +394,13 @@ boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Handle<v8::String> src,
   {
     v8::ScriptOrigin script_origin(name, v8::Integer::New(m_isolate, line), v8::Integer::New(m_isolate, col));
 
-    script = v8::Script::Compile(source, &script_origin, script_data.get());
+    script = v8::Script::Compile(context, source, &script_origin);
   }
   else
   {
     v8::ScriptOrigin script_origin(name);
 
-    script = v8::Script::Compile(source, &script_origin, script_data.get());
+    script = v8::Script::Compile(context, source, &script_origin);
   }
 
   Py_END_ALLOW_THREADS
@@ -469,7 +416,7 @@ boost::shared_ptr<CScript> CEngine::InternalCompile(v8::Handle<v8::String> src,
 
   if (script.IsEmpty()) CJavascriptException::ThrowIf(m_isolate, try_catch);
 
-  return boost::shared_ptr<CScript>(new CScript(m_isolate, *this, script_source, script));
+  return boost::shared_ptr<CScript>(new CScript(m_isolate, *this, script_source, script.ToLocalChecked()));
 }
 
 py::object CEngine::ExecuteScript(v8::Handle<v8::Script> script)

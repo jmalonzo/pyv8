@@ -62,7 +62,7 @@ class CJavascriptObject : public CWrapper
 protected:
   v8::Persistent<v8::Object> m_obj;
 
-  void CheckAttr(v8::Handle<v8::String> name) const;
+  void CheckAttr(v8::Local<v8::String> name) const;
 
   CJavascriptObject()
   {
@@ -102,10 +102,10 @@ public:
   void Dump(std::ostream& os) const;
 
   static py::object Wrap(CJavascriptObject *obj);
-  static py::object Wrap(v8::Handle<v8::Value> value,
-    v8::Handle<v8::Object> self = v8::Handle<v8::Object>());
-  static py::object Wrap(v8::Handle<v8::Object> obj,
-    v8::Handle<v8::Object> self = v8::Handle<v8::Object>());
+  static py::object Wrap(v8::Local<v8::Value> value,
+    v8::Local<v8::Object> self = v8::Local<v8::Object>());
+  static py::object Wrap(v8::Local<v8::Object> obj,
+    v8::Local<v8::Object> self = v8::Local<v8::Object>());
 };
 
 class CJavascriptNull : public CJavascriptObject
@@ -145,7 +145,7 @@ public:
     reference dereference() const { return m_array->GetItem(py::long_(m_idx)); }
   };
 
-  CJavascriptArray(v8::Handle<v8::Array> array)
+  CJavascriptArray(v8::Local<v8::Array> array)
     : CJavascriptObject(array), m_size(array->Length())
   {
 
@@ -223,7 +223,7 @@ class ObjectTracer
 
   void Trace(void);
 
-  static void WeakCallback(const v8::WeakCallbackData<v8::Value, ObjectTracer>& data);
+  static void WeakCallback(const v8::WeakCallbackInfo<ObjectTracer>& data);
 
   static LivingMap *GetLivingMapping(void);
 public:
@@ -247,7 +247,7 @@ class ContextTracer
 
   void Trace(void);
 
-  static void WeakCallback(const v8::WeakCallbackData<v8::Context, ContextTracer>& data);
+  static void WeakCallback(const v8::WeakCallbackInfo<ContextTracer>& data);
 public:
   ContextTracer(v8::Handle<v8::Context> ctxt, LivingMap *living);
   ~ContextTracer(void);
