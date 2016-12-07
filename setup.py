@@ -244,6 +244,10 @@ if is_winnt:
 
 elif is_linux or is_freebsd:
     library_path = "%s/out.gn/%s.%s/obj/" % (V8_HOME, arch, mode)
+    extra_link_args += [os.path.join(library_path, "lib%s.a") % lib for lib in [
+        "v8_base", "v8_libbase", "v8_libsampler",
+        "v8_external_snapshot", "v8_libplatform"
+    ]]
 
 elif is_osx:
     library_path = "%s/out.gn/%s.%s/obj/" % (V8_HOME, arch, mode)

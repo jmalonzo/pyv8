@@ -1,1 +1,21 @@
-Please refer to http://code.google.com/p/pyv8/ for more detail
+
+# Building V8
+
+First, enable RTTI and Exceptions in the GN build.
+
+```
+$ vi build/config/BUILDCONFIG.gn # Change no_rtti to rtti; Remove no_exceptions
+$ python tools/dev/v8gen.py -vv x64.release -- is_component_build=true is_debug=false v8_enable_i18n_support=false v8_enable_inspector=false v8_deprecation_warnings=true
+$ PATH=$PATH:~/code/depot_tools ninja -C out.gn/x64.release d8
+```
+
+Building `d8` will build the necessary *v8* libs required to build PyV8.
+
+More info and GN options at https://github.com/v8/v8/wiki/Building%20with%20GN.
+
+# Building PyV8
+
+```
+$ V8_HOME=../path-to-v8 python setup.py build
+```
+
